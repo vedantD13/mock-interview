@@ -1,15 +1,15 @@
 const mongoose = require('mongoose');
 
 const interviewSchema = new mongoose.Schema({
-  userId: { type: String, default: 'guest' },
-  jsonResume: { type: Object }, // Stores extracted skills/experience
-  messages: [
-    {
-      role: { type: String, enum: ['ai', 'user'] },
-      content: { type: String, required: true },
-      timestamp: { type: Date, default: Date.now }
-    }
-  ],
+  userId: String,
+  jsonResume: Object,
+  messages: Array,
+  // NEW: Store the feedback so the Dashboard can show it
+  feedback: {
+    rating: Number,
+    feedback: String,
+    improvement: String
+  },
   createdAt: { type: Date, default: Date.now }
 });
 

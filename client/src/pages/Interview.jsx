@@ -2,10 +2,10 @@ import { useState, useEffect, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { 
   Send, Mic, MicOff, Code, Layout, XCircle, CheckCircle, Home, 
-  Play, Terminal, Volume2, VolumeX, AlertCircle 
+  Play, Terminal, Volume2, VolumeX, AlertCircle, Clock, AlertTriangle 
 } from 'lucide-react';
 import Editor from '@monaco-editor/react';
-import ReactMarkdown from 'react-markdown'; // NEW: For formatting text
+import ReactMarkdown from 'react-markdown';
 
 const Interview = () => {
   const location = useLocation();
@@ -21,18 +21,22 @@ const Interview = () => {
     { id: 1, sender: 'ai', text: 'Hello! I am ready to start your technical interview. Introduce yourself or say "ready" to begin.' },
   ]);
 
-  // Settings
-  const [isMuted, setIsMuted] = useState(false); // NEW: Mute state
-
-  // Media & Tabs
+  // Settings & Media
+  const [isMuted, setIsMuted] = useState(false);
   const videoRef = useRef(null);
-  const [activeTab, setActiveTab] = useState('analysis');
+  const [activeTab, setActiveTab] = useState('analysis'); 
   const [feedback, setFeedback] = useState(null);
   const [loadingFeedback, setLoadingFeedback] = useState(false);
 
   // Code Editor
   const [userCode, setUserCode] = useState("// Write your solution here\nconsole.log('Hello World');");
   const [codeOutput, setCodeOutput] = useState([]);
+
+  // --- NEW: TIMER STATE ---
+  const [timeLeft, setTimeLeft] = useState(1800); // 30 Minutes (in seconds)
+  
+  // --- NEW: CHEAT DETECTION STATE ---
+  const [tabSwitchCount, setTabSwitchCount] = useState(0);
 
   // --- 1. WEBCAM ---
   useEffect(() => {
@@ -45,9 +49,46 @@ const Interview = () => {
     if (activeTab === 'analysis' && !feedback) startWebcam();
   }, [activeTab, feedback]);
 
-  // --- 2. TEXT-TO-SPEECH (With Mute Check) ---
+  // --- 2. TIMER LOGIC ---
+  useEffect(() => {
+    if (feedback) return; // Stop timer if interview ended
+    const timer = setInterval(() => {
+      setTimeLeft((prev) => {
+        if (prev <= 1) {
+          clearInterval(timer);
+          endInterview(); // Auto-end when time is up
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [feedback]);
+
+  // Format Time (MM:SS)
+  const formatTime = (seconds) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+  };
+
+  // --- 3. CHEAT DETECTION LOGIC ---
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        setTabSwitchCount(prev => prev + 1);
+        // Optional: Play a warning sound
+        const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3'); 
+        audio.play().catch(() => {}); 
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, []);
+
+  // --- 4. TEXT-TO-SPEECH ---
   const speak = (text) => {
-    if (isMuted) return; // Don't speak if muted
+    if (isMuted) return;
     if ('speechSynthesis' in window) {
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(text);
@@ -55,7 +96,7 @@ const Interview = () => {
     }
   };
 
-  // --- 3. SPEECH-TO-TEXT ---
+  // --- 5. SPEECH-TO-TEXT ---
   const startListening = () => {
     if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -70,7 +111,7 @@ const Interview = () => {
 
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, isTyping]);
 
-  // --- 4. SEND MESSAGE ---
+  // --- 6. SEND MESSAGE ---
   const sendMessage = async (manualText = null) => {
     const textToSend = manualText || input;
     if (!textToSend.trim()) return;
@@ -90,18 +131,14 @@ const Interview = () => {
 
       if (response.ok) {
         if (data.sessionId && data.sessionId !== sessionId) setSessionId(data.sessionId);
-        
         setMessages(prev => [...prev, { id: Date.now() + 1, sender: 'ai', text: data.reply }]);
         speak(data.reply);
-        
         if (data.reply.toLowerCase().includes("code")) setActiveTab('code');
       }
-    } catch (error) {
-      console.error("Chat Error:", error);
-    } finally { setIsTyping(false); }
+    } catch (error) { console.error("Chat Error:", error); } finally { setIsTyping(false); }
   };
 
-  // --- 5. END INTERVIEW ---
+  // --- 7. END INTERVIEW ---
   const endInterview = async () => {
     if (!sessionId) return alert("No active session.");
     setLoadingFeedback(true);
@@ -116,7 +153,7 @@ const Interview = () => {
     } catch (err) { alert("Failed to generate feedback."); } finally { setLoadingFeedback(false); }
   };
 
-  // --- 6. RUN CODE ---
+  // --- 8. RUN CODE ---
   const runCode = () => {
     setCodeOutput([]);
     const logs = [];
@@ -142,9 +179,9 @@ const Interview = () => {
           {loadingFeedback ? (
             <div className="text-white text-xl animate-pulse font-semibold">Generating Report...</div>
           ) : (
-            <div className="bg-white rounded-3xl p-8 max-w-2xl w-full shadow-2xl">
+            <div className="bg-white rounded-3xl p-8 max-w-2xl w-full shadow-2xl animate-fade-in-up">
               <div className="flex justify-between items-center mb-6">
-                <h2 className="text-3xl font-bold text-gray-900">Results</h2>
+                <h2 className="text-3xl font-bold text-gray-900">Interview Results</h2>
                 <div className="bg-indigo-100 text-indigo-700 px-4 py-2 rounded-full font-bold text-xl">{feedback.rating}/10</div>
               </div>
               <div className="space-y-4">
@@ -164,7 +201,16 @@ const Interview = () => {
       )}
 
       {/* --- LEFT SIDE: CHAT --- */}
-      <div className="flex-1 bg-white rounded-2xl shadow-sm border border-gray-200 flex flex-col overflow-hidden">
+      <div className="flex-1 bg-white rounded-2xl shadow-sm border border-gray-200 flex flex-col overflow-hidden relative">
+        
+        {/* CHEAT WARNING BANNER */}
+        {tabSwitchCount > 0 && !feedback && (
+          <div className="bg-red-500 text-white text-xs font-bold px-4 py-2 text-center animate-pulse flex items-center justify-center gap-2">
+            <AlertTriangle size={14} />
+            Warning: Tab switch detected ({tabSwitchCount} times). Focus on the interview!
+          </div>
+        )}
+
         {/* HEADER */}
         <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-white z-10">
           <div>
@@ -173,16 +219,17 @@ const Interview = () => {
               <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span><span>Live Session</span>
             </div>
           </div>
-          <div className="flex gap-2">
-             {/* MUTE BUTTON */}
-             <button 
-               onClick={() => setIsMuted(!isMuted)}
-               className="p-2 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-full transition-colors"
-               title={isMuted ? "Unmute AI" : "Mute AI"}
-             >
+          
+          {/* TIMER & CONTROLS */}
+          <div className="flex items-center gap-3">
+             <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg font-mono font-bold ${timeLeft < 300 ? 'bg-red-100 text-red-600' : 'bg-gray-100 text-gray-700'}`}>
+                <Clock size={16} />
+                {formatTime(timeLeft)}
+             </div>
+
+             <button onClick={() => setIsMuted(!isMuted)} className="p-2 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-full transition-colors">
                {isMuted ? <VolumeX size={20} /> : <Volume2 size={20} />}
              </button>
-
              <button onClick={endInterview} className="bg-red-50 text-red-600 px-4 py-2 rounded-lg font-semibold hover:bg-red-100 flex items-center gap-2">
                <XCircle size={18} /> End
              </button>
@@ -193,64 +240,20 @@ const Interview = () => {
         <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-slate-50/50">
           {messages.map((msg) => (
             <div key={msg.id} className={`flex w-full ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
-              {msg.sender === 'ai' && (
-                <div className="w-9 h-9 rounded-full bg-indigo-600 flex items-center justify-center mr-3 shadow-md shrink-0 text-white text-xs font-bold">AI</div>
-              )}
-              
-              <div className={`max-w-[85%] p-4 text-[15px] leading-relaxed shadow-sm ${
-                msg.sender === 'user' 
-                  ? 'bg-gray-900 text-white rounded-2xl rounded-br-none' 
-                  : 'bg-white text-gray-800 border border-gray-200 rounded-2xl rounded-bl-none'
-              }`}>
-                {/* MARKDOWN RENDERER */}
-                {msg.sender === 'ai' ? (
-                  <ReactMarkdown 
-                    components={{
-                      // Custom styles for Markdown elements
-                      p: ({node, ...props}) => <p className="mb-2 last:mb-0" {...props} />,
-                      ul: ({node, ...props}) => <ul className="list-disc ml-4 mb-2" {...props} />,
-                      ol: ({node, ...props}) => <ol className="list-decimal ml-4 mb-2" {...props} />,
-                      li: ({node, ...props}) => <li className="mb-1" {...props} />,
-                      strong: ({node, ...props}) => <span className="font-bold text-indigo-700" {...props} />,
-                      code: ({node, inline, ...props}) => (
-                         inline 
-                           ? <code className="bg-gray-100 text-red-500 px-1 py-0.5 rounded font-mono text-sm" {...props} />
-                           : <code className="block bg-gray-900 text-gray-100 p-3 rounded-lg font-mono text-xs my-2 overflow-x-auto" {...props} />
-                      )
-                    }}
-                  >
-                    {msg.text}
-                  </ReactMarkdown>
-                ) : (
-                  msg.text
-                )}
+              {msg.sender === 'ai' && <div className="w-9 h-9 rounded-full bg-indigo-600 flex items-center justify-center mr-3 shadow-md shrink-0 text-white text-xs font-bold">AI</div>}
+              <div className={`max-w-[85%] p-4 text-[15px] leading-relaxed shadow-sm ${msg.sender === 'user' ? 'bg-gray-900 text-white rounded-2xl rounded-br-none' : 'bg-white text-gray-800 border border-gray-200 rounded-2xl rounded-bl-none'}`}>
+                {msg.sender === 'ai' ? <ReactMarkdown>{msg.text}</ReactMarkdown> : msg.text}
               </div>
             </div>
           ))}
-          
-          {/* TYPING ANIMATION BUBBLE */}
-          {isTyping && (
-             <div className="flex w-full justify-start animate-fade-in-up">
-               <div className="w-9 h-9 rounded-full bg-indigo-600 flex items-center justify-center mr-3 shadow-md shrink-0 text-white text-xs font-bold">AI</div>
-               <div className="bg-white border border-gray-200 p-4 rounded-2xl rounded-bl-none shadow-sm flex items-center gap-1">
-                 <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
-                 <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce delay-75"></div>
-                 <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce delay-150"></div>
-               </div>
-             </div>
-          )}
+          {isTyping && <div className="ml-12 text-gray-400 text-sm animate-pulse">AI is typing...</div>}
           <div ref={messagesEndRef} />
         </div>
 
         {/* INPUT */}
         <div className="p-5 bg-white border-t border-gray-100">
           <div className="flex items-center gap-3 bg-gray-50 p-2.5 rounded-2xl border border-gray-200 focus-within:ring-2 focus-within:ring-indigo-100">
-            <input 
-               type="text" className="flex-1 bg-transparent px-4 py-2 focus:outline-none" 
-               placeholder="Type your answer..." value={input} 
-               onChange={(e) => setInput(e.target.value)} 
-               onKeyDown={(e) => e.key === 'Enter' && sendMessage()} 
-            />
+            <input type="text" className="flex-1 bg-transparent px-4 py-2 focus:outline-none" placeholder="Type your answer..." value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && sendMessage()} />
             <button onClick={startListening} className={`p-2 rounded-full ${isListening ? 'bg-red-100 text-red-600 animate-pulse' : 'text-gray-400'}`}>
               {isListening ? <MicOff size={22} /> : <Mic size={22} />}
             </button>
@@ -266,7 +269,8 @@ const Interview = () => {
            <button onClick={() => setActiveTab('code')} className={`flex-1 flex items-center justify-center gap-2 py-2.5 text-sm font-semibold rounded-lg ${activeTab === 'code' ? 'bg-indigo-50 text-indigo-600' : 'text-gray-500'}`}><Code size={18}/> Code</button>
          </div>
 
-         {activeTab === 'analysis' ? (
+         {/* TAB 1: ANALYSIS */}
+         {activeTab === 'analysis' && (
            <>
              <div className="h-64 bg-gray-900 rounded-2xl relative overflow-hidden shadow-lg border border-gray-800">
                <video ref={videoRef} autoPlay muted className="absolute inset-0 w-full h-full object-cover transform scale-x-[-1]" />
@@ -279,13 +283,18 @@ const Interview = () => {
                     <div className="flex justify-between text-sm font-medium text-gray-600 mb-2"><span>Confidence</span><span className="text-green-600 font-bold">High</span></div>
                     <div className="h-2.5 bg-gray-100 rounded-full overflow-hidden"><div className="h-full bg-green-500 w-[85%] rounded-full"></div></div>
                   </div>
-                  <div className="p-4 bg-blue-50 text-blue-800 text-sm rounded-xl border border-blue-100">
-                    💡 <strong>Tip:</strong> Speak clearly and maintain eye contact.
-                  </div>
+                  {tabSwitchCount > 0 && (
+                     <div className="p-4 bg-red-50 text-red-800 text-sm rounded-xl border border-red-100 font-medium">
+                       🚨 <strong>Alert:</strong> You have switched tabs {tabSwitchCount} times. This will affect your integrity score.
+                     </div>
+                  )}
                </div>
              </div>
            </>
-         ) : (
+         )}
+
+         {/* TAB 2: CODE */}
+         {activeTab === 'code' && (
            <div className="flex-1 bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden flex flex-col">
              <div className="px-4 py-3 bg-gray-50 border-b border-gray-200 flex justify-between items-center">
                <span className="text-xs font-bold text-gray-500 uppercase">JS</span>
