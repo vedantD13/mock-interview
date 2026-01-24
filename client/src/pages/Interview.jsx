@@ -2,7 +2,8 @@ import { useState, useEffect, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { 
   Send, Mic, MicOff, Code, Layout, XCircle, CheckCircle, Home, 
-  Play, Terminal, Volume2, VolumeX, AlertCircle, Clock, AlertTriangle 
+  Play, Terminal, Volume2, VolumeX, AlertCircle, Clock, AlertTriangle,
+  Video, VideoOff 
 } from 'lucide-react';
 import Editor from '@monaco-editor/react';
 import ReactMarkdown from 'react-markdown';
@@ -22,41 +23,84 @@ const Interview = () => {
   ]);
 
   // Settings & Media
-  const [isMuted, setIsMuted] = useState(false);
+  const [isAIMuted, setIsAIMuted] = useState(false);
   const videoRef = useRef(null);
   const [activeTab, setActiveTab] = useState('analysis'); 
   const [feedback, setFeedback] = useState(null);
   const [loadingFeedback, setLoadingFeedback] = useState(false);
 
+  // --- User Media State ---
+  const [isUserMicOn, setIsUserMicOn] = useState(true);
+  const [isUserCameraOn, setIsUserCameraOn] = useState(true);
+
   // Code Editor
   const [userCode, setUserCode] = useState("// Write your solution here\nconsole.log('Hello World');");
   const [codeOutput, setCodeOutput] = useState([]);
 
-  // --- NEW: TIMER STATE ---
-  const [timeLeft, setTimeLeft] = useState(1800); // 30 Minutes (in seconds)
+  // --- TIMER STATE ---
+  const [timeLeft, setTimeLeft] = useState(1800); // 30 Minutes
   
-  // --- NEW: CHEAT DETECTION STATE ---
+  // --- CHEAT DETECTION STATE ---
   const [tabSwitchCount, setTabSwitchCount] = useState(0);
 
-  // --- 1. WEBCAM ---
+  // --- 1. WEBCAM & MEDIA LOGIC ---
   useEffect(() => {
     const startWebcam = async () => {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-        if (videoRef.current) videoRef.current.srcObject = stream;
-      } catch (err) { console.error("Webcam Error:", err); }
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
+      } catch (err) { 
+        console.error("Webcam Error:", err); 
+        setIsUserCameraOn(false);
+        setIsUserMicOn(false);
+      }
     };
     if (activeTab === 'analysis' && !feedback) startWebcam();
+    
+    return () => {
+      if (videoRef.current && videoRef.current.srcObject) {
+        videoRef.current.srcObject.getTracks().forEach(track => track.stop());
+      }
+    };
   }, [activeTab, feedback]);
+
+  // Toggle User Microphone
+  const toggleUserMic = () => {
+    if (videoRef.current && videoRef.current.srcObject) {
+      const audioTracks = videoRef.current.srcObject.getAudioTracks();
+      audioTracks.forEach(track => track.enabled = !isUserMicOn);
+      setIsUserMicOn(!isUserMicOn);
+    }
+  };
+
+  // Toggle User Camera
+  const toggleUserCamera = () => {
+    if (videoRef.current && videoRef.current.srcObject) {
+      const videoTracks = videoRef.current.srcObject.getVideoTracks();
+      videoTracks.forEach(track => track.enabled = !isUserCameraOn);
+      setIsUserCameraOn(!isUserCameraOn);
+    }
+  };
+
+  // Toggle AI Mute
+  const toggleAIMute = () => {
+    const newState = !isAIMuted;
+    setIsAIMuted(newState);
+    if (newState) {
+      window.speechSynthesis.cancel();
+    }
+  };
 
   // --- 2. TIMER LOGIC ---
   useEffect(() => {
-    if (feedback) return; // Stop timer if interview ended
+    if (feedback) return;
     const timer = setInterval(() => {
       setTimeLeft((prev) => {
         if (prev <= 1) {
           clearInterval(timer);
-          endInterview(); // Auto-end when time is up
+          endInterview();
           return 0;
         }
         return prev - 1;
@@ -65,19 +109,17 @@ const Interview = () => {
     return () => clearInterval(timer);
   }, [feedback]);
 
-  // Format Time (MM:SS)
   const formatTime = (seconds) => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
     return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
   };
 
-  // --- 3. CHEAT DETECTION LOGIC ---
+  // --- 3. CHEAT DETECTION ---
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.hidden) {
         setTabSwitchCount(prev => prev + 1);
-        // Optional: Play a warning sound
         const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3'); 
         audio.play().catch(() => {}); 
       }
@@ -86,9 +128,9 @@ const Interview = () => {
     return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
   }, []);
 
-  // --- 4. TEXT-TO-SPEECH ---
+  // --- 4. SPEECH OUTPUT ---
   const speak = (text) => {
-    if (isMuted) return;
+    if (isAIMuted) return;
     if ('speechSynthesis' in window) {
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(text);
@@ -96,7 +138,7 @@ const Interview = () => {
     }
   };
 
-  // --- 5. SPEECH-TO-TEXT ---
+  // --- 5. SPEECH INPUT ---
   const startListening = () => {
     if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -111,7 +153,7 @@ const Interview = () => {
 
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, isTyping]);
 
-  // --- 6. SEND MESSAGE ---
+  // --- 6. SEND MESSAGE (With Fallback) ---
   const sendMessage = async (manualText = null) => {
     const textToSend = manualText || input;
     if (!textToSend.trim()) return;
@@ -127,15 +169,27 @@ const Interview = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionId: sessionId || 'guest_session', userMessage: userMsg.text })
       });
-      const data = await response.json();
+      
+      if (!response.ok) throw new Error("Backend not available");
 
+      const data = await response.json();
       if (response.ok) {
         if (data.sessionId && data.sessionId !== sessionId) setSessionId(data.sessionId);
         setMessages(prev => [...prev, { id: Date.now() + 1, sender: 'ai', text: data.reply }]);
         speak(data.reply);
         if (data.reply.toLowerCase().includes("code")) setActiveTab('code');
       }
-    } catch (error) { console.error("Chat Error:", error); } finally { setIsTyping(false); }
+    } catch (error) { 
+        // Fallback if backend is offline so chat doesn't freeze
+        console.error("Chat Error (Using Fallback):", error); 
+        setTimeout(() => {
+            const fallbackMsg = "I am currently running in offline mode. Please continue with the coding challenge.";
+            setMessages(prev => [...prev, { id: Date.now() + 1, sender: 'ai', text: fallbackMsg }]);
+            speak(fallbackMsg);
+        }, 1000);
+    } finally { 
+        setIsTyping(false); 
+    }
   };
 
   // --- 7. END INTERVIEW ---
@@ -203,11 +257,11 @@ const Interview = () => {
       {/* --- LEFT SIDE: CHAT --- */}
       <div className="flex-1 bg-white rounded-2xl shadow-sm border border-gray-200 flex flex-col overflow-hidden relative">
         
-        {/* CHEAT WARNING BANNER */}
+        {/* CHEAT WARNING */}
         {tabSwitchCount > 0 && !feedback && (
           <div className="bg-red-500 text-white text-xs font-bold px-4 py-2 text-center animate-pulse flex items-center justify-center gap-2">
             <AlertTriangle size={14} />
-            Warning: Tab switch detected ({tabSwitchCount} times). Focus on the interview!
+            Warning: Tab switch detected ({tabSwitchCount} times).
           </div>
         )}
 
@@ -220,16 +274,16 @@ const Interview = () => {
             </div>
           </div>
           
-          {/* TIMER & CONTROLS */}
           <div className="flex items-center gap-3">
              <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg font-mono font-bold ${timeLeft < 300 ? 'bg-red-100 text-red-600' : 'bg-gray-100 text-gray-700'}`}>
                 <Clock size={16} />
                 {formatTime(timeLeft)}
              </div>
 
-             <button onClick={() => setIsMuted(!isMuted)} className="p-2 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-full transition-colors">
-               {isMuted ? <VolumeX size={20} /> : <Volume2 size={20} />}
+             <button onClick={toggleAIMute} className={`p-2 rounded-full transition-colors ${isAIMuted ? 'bg-red-50 text-red-600' : 'text-gray-400 hover:text-indigo-600 hover:bg-indigo-50'}`} title={isAIMuted ? "Unmute AI" : "Mute AI"}>
+               {isAIMuted ? <VolumeX size={20} /> : <Volume2 size={20} />}
              </button>
+
              <button onClick={endInterview} className="bg-red-50 text-red-600 px-4 py-2 rounded-lg font-semibold hover:bg-red-100 flex items-center gap-2">
                <XCircle size={18} /> End
              </button>
@@ -272,22 +326,44 @@ const Interview = () => {
          {/* TAB 1: ANALYSIS */}
          {activeTab === 'analysis' && (
            <>
-             <div className="h-64 bg-gray-900 rounded-2xl relative overflow-hidden shadow-lg border border-gray-800">
-               <video ref={videoRef} autoPlay muted className="absolute inset-0 w-full h-full object-cover transform scale-x-[-1]" />
-               <div className="absolute bottom-4 left-4 flex items-center gap-2 z-20"><span className="w-2.5 h-2.5 bg-green-500 rounded-full animate-pulse shadow-green-500/50"></span><span className="text-white text-xs font-bold">YOU</span></div>
+             {/* Webcam & Controls */}
+             <div className="h-64 bg-gray-900 rounded-2xl relative overflow-hidden shadow-lg border border-gray-800 group">
+                {!isUserCameraOn && (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-800 text-gray-500 z-10">
+                    <div className="p-4 bg-gray-700 rounded-full mb-2"><VideoOff size={32} /></div>
+                    <p className="text-sm font-medium">Camera is off</p>
+                  </div>
+                )}
+                <video ref={videoRef} autoPlay muted className={`absolute inset-0 w-full h-full object-cover transform scale-x-[-1] ${!isUserCameraOn ? 'hidden' : ''}`} />
+                <div className="absolute bottom-4 left-4 flex items-center gap-2 z-20">
+                  <span className={`w-2.5 h-2.5 rounded-full ${isUserMicOn ? 'bg-green-500 animate-pulse shadow-green-500/50' : 'bg-red-500'}`}></span>
+                  <span className="text-white text-xs font-bold drop-shadow-md">YOU</span>
+                </div>
+                {/* Controls Overlay */}
+                <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 flex items-center gap-3 z-30 transition-opacity duration-200 opacity-0 group-hover:opacity-100">
+                   <div className="flex items-center gap-2 bg-gray-900/80 backdrop-blur-md px-4 py-2 rounded-full border border-white/10">
+                      <button onClick={toggleUserMic} className={`p-3 rounded-full transition-all ${!isUserMicOn ? 'bg-red-500 text-white' : 'bg-gray-700 hover:bg-gray-600 text-white'}`} title={isUserMicOn ? "Turn off microphone" : "Turn on microphone"}>
+                        {!isUserMicOn ? <MicOff size={18} /> : <Mic size={18} />}
+                      </button>
+                      <button onClick={toggleUserCamera} className={`p-3 rounded-full transition-all ${!isUserCameraOn ? 'bg-red-500 text-white' : 'bg-gray-700 hover:bg-gray-600 text-white'}`} title={isUserCameraOn ? "Turn off camera" : "Turn on camera"}>
+                        {!isUserCameraOn ? <VideoOff size={18} /> : <Video size={18} />}
+                      </button>
+                   </div>
+                </div>
              </div>
+
              <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200 flex-1 flex flex-col">
                <h3 className="font-bold text-gray-800 mb-6 flex items-center gap-2"><AlertCircle size={20} className="text-indigo-500" /> Live Analysis</h3>
                <div className="space-y-6">
-                  <div>
-                    <div className="flex justify-between text-sm font-medium text-gray-600 mb-2"><span>Confidence</span><span className="text-green-600 font-bold">High</span></div>
-                    <div className="h-2.5 bg-gray-100 rounded-full overflow-hidden"><div className="h-full bg-green-500 w-[85%] rounded-full"></div></div>
-                  </div>
-                  {tabSwitchCount > 0 && (
+                 <div>
+                   <div className="flex justify-between text-sm font-medium text-gray-600 mb-2"><span>Confidence</span><span className="text-green-600 font-bold">High</span></div>
+                   <div className="h-2.5 bg-gray-100 rounded-full overflow-hidden"><div className="h-full bg-green-500 w-[85%] rounded-full"></div></div>
+                 </div>
+                 {tabSwitchCount > 0 && (
                      <div className="p-4 bg-red-50 text-red-800 text-sm rounded-xl border border-red-100 font-medium">
-                       🚨 <strong>Alert:</strong> You have switched tabs {tabSwitchCount} times. This will affect your integrity score.
+                       🚨 <strong>Alert:</strong> You have switched tabs {tabSwitchCount} times.
                      </div>
-                  )}
+                 )}
                </div>
              </div>
            </>
