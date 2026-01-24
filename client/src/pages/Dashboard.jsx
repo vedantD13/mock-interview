@@ -1,164 +1,206 @@
-import { useEffect, useState } from 'react';
+import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { TrendingUp, Award, Calendar, ArrowRight, Loader2, Star, Home } from 'lucide-react';
+import { useUser, UserButton, SignInButton } from '@clerk/clerk-react';
+import { 
+  Video, FileText, BarChart2, Target, Map, ArrowUpRight, 
+  LogOut, Loader2, Lock, ShieldAlert 
+} from 'lucide-react';
 
 const Dashboard = () => {
   const navigate = useNavigate();
-  const [history, setHistory] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const { user, isLoaded, isSignedIn } = useUser();
 
-  useEffect(() => {
-    const fetchHistory = async () => {
-      try {
-        const res = await fetch('http://localhost:5000/api/dashboard');
-        const data = await res.json();
-        setHistory(data);
-      } catch (err) {
-        console.error("Failed to load history");
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchHistory();
-  }, []);
+  if (!isLoaded) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <Loader2 className="w-10 h-10 animate-spin text-blue-500" />
+      </div>
+    );
+  }
 
-  // Calculate Stats
-  const totalInterviews = history.length;
-  const avgScore = history.length > 0 
-    ? (history.reduce((acc, curr) => acc + (curr.feedback?.rating || 0), 0) / history.length).toFixed(1)
-    : 0;
-
-  if (loading) return (
-    <div className="h-screen flex items-center justify-center bg-gray-50">
-      <Loader2 className="w-10 h-10 text-indigo-600 animate-spin" />
-    </div>
-  );
+  // Define actions that might be locked for guests
+  const handleFeatureClick = (path, requiresAuth) => {
+    if (requiresAuth && !isSignedIn) {
+      // Optional: Trigger a toast notification here saying "Login required"
+      alert("Please sign in to access this feature.");
+      return;
+    }
+    navigate(path);
+  };
 
   return (
-    <div className="min-h-screen bg-gray-50 p-8 font-sans">
-      
-      {/* HEADER */}
-      <div className="max-w-6xl mx-auto mb-10 flex justify-between items-center animate-fade-in-down">
+    <div className="min-h-screen bg-gray-50 flex">
+      {/* Sidebar */}
+      <div className="w-64 bg-slate-900 text-white p-6 hidden md:flex flex-col justify-between">
         <div>
-          <h1 className="text-4xl font-extrabold text-gray-900 tracking-tight">Your Performance</h1>
-          <p className="text-gray-500 mt-2 text-lg">Track your interview progress over time.</p>
+          <div className="text-2xl font-bold mb-10 text-blue-400 cursor-pointer" onClick={() => navigate('/')}>
+            CareerAI
+          </div>
+          <div className="space-y-4">
+            <SidebarItem icon={<ArrowUpRight size={20} />} label="Dashboard" active />
+            <SidebarItem icon={<Video size={20} />} label="Interviews" onClick={() => handleFeatureClick('/interview', false)} />
+            
+            {/* Protected Features in Sidebar */}
+            <SidebarItem icon={<FileText size={20} />} label="Resume Builder" locked={!isSignedIn} onClick={() => handleFeatureClick('/resume-builder', true)} />
+            <SidebarItem icon={<BarChart2 size={20} />} label="Market Insights" onClick={() => handleFeatureClick('/market-insights', false)} />
+            <SidebarItem icon={<Target size={20} />} label="Skill Tracker" locked={!isSignedIn} onClick={() => handleFeatureClick('/skill-tracker', true)} />
+          </div>
         </div>
-        <button 
-          onClick={() => navigate('/')}
-          className="bg-white text-gray-700 px-5 py-2.5 rounded-xl font-bold border border-gray-200 hover:bg-gray-100 transition-all flex items-center gap-2 shadow-sm"
-        >
-          <Home size={20} /> Back Home
-        </button>
+
+        {/* Auth Button in Sidebar */}
+        <div className="pt-6 border-t border-slate-700">
+          {isSignedIn ? (
+             // UserButton handles its own sign out
+             <div className="flex items-center gap-2 text-slate-400">
+                <span className="text-sm">Account</span>
+             </div>
+          ) : (
+            <SignInButton mode="modal">
+              <button className="flex items-center gap-3 p-3 w-full rounded-lg bg-blue-600 hover:bg-blue-700 text-white transition">
+                <span className="font-medium">Sign In</span>
+              </button>
+            </SignInButton>
+          )}
+        </div>
       </div>
 
-      <div className="max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-6 mb-12">
-        
-        {/* STAT CARD 1: Total Interviews */}
-        <div className="bg-gradient-to-br from-indigo-500 to-purple-600 rounded-3xl p-6 text-white shadow-lg transform hover:scale-105 transition-all duration-300">
-          <div className="flex items-center gap-4 mb-4">
-            <div className="p-3 bg-white/20 rounded-2xl backdrop-blur-sm">
-              <Calendar size={24} className="text-white" />
-            </div>
-            <span className="font-semibold text-indigo-100">Total Sessions</span>
-          </div>
-          <h2 className="text-5xl font-bold">{totalInterviews}</h2>
-          <p className="text-indigo-200 mt-2 text-sm">Completed mock interviews</p>
-        </div>
-
-        {/* STAT CARD 2: Average Score */}
-        <div className="bg-white rounded-3xl p-6 shadow-lg border border-gray-100 transform hover:scale-105 transition-all duration-300">
-          <div className="flex items-center gap-4 mb-4">
-            <div className="p-3 bg-amber-100 rounded-2xl">
-              <Star size={24} className="text-amber-600" />
-            </div>
-            <span className="font-semibold text-gray-500">Average Score</span>
-          </div>
-          <h2 className="text-5xl font-bold text-gray-900">{avgScore}<span className="text-2xl text-gray-400">/10</span></h2>
-          <p className="text-green-600 mt-2 text-sm font-medium flex items-center gap-1">
-            <TrendingUp size={14} /> Top 15% of users
-          </p>
-        </div>
-
-        {/* CARD 3: Call to Action */}
-        <div className="bg-gray-900 rounded-3xl p-6 text-white shadow-lg flex flex-col justify-between transform hover:scale-105 transition-all duration-300 group cursor-pointer" onClick={() => navigate('/')}>
+      {/* Main Content */}
+      <div className="flex-1 p-8 overflow-y-auto">
+        <header className="flex justify-between items-center mb-8">
           <div>
-            <div className="p-3 bg-gray-800 w-fit rounded-2xl mb-4 group-hover:bg-indigo-600 transition-colors">
-              <Award size={24} />
-            </div>
-            <h3 className="text-2xl font-bold">Start New Session</h3>
-            <p className="text-gray-400 mt-2">Practice makes perfect. Start another round now.</p>
+            <h1 className="text-2xl font-bold text-gray-800">
+              Welcome back, {isSignedIn ? (user.firstName || "User") : "Guest"}
+            </h1>
+            <p className="text-gray-500">
+              {isSignedIn 
+                ? "Here's what's happening with your career progress." 
+                : "You are in Guest Mode. Data will not be saved."}
+            </p>
           </div>
-          <div className="flex justify-end">
-            <div className="w-10 h-10 rounded-full bg-white text-black flex items-center justify-center group-hover:translate-x-2 transition-transform">
-              <ArrowRight size={20} />
+          
+          <div className="scale-125">
+             {isSignedIn ? <UserButton afterSignOutUrl="/" /> : (
+               <div className="w-10 h-10 bg-slate-200 rounded-full flex items-center justify-center">
+                 <span className="text-slate-500 font-bold">G</span>
+               </div>
+             )}
+          </div>
+        </header>
+
+        {/* Guest Warning Banner */}
+        {!isSignedIn && (
+          <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4 mb-8 flex items-start gap-4">
+            <ShieldAlert className="w-6 h-6 text-yellow-600 mt-1" />
+            <div>
+              <h3 className="font-bold text-yellow-800">Limited Guest Access</h3>
+              <p className="text-yellow-700 text-sm mt-1">
+                You can try out the AI Interview and Market Insights, but your history will not be saved and you cannot use the Resume Builder. 
+                <SignInButton mode="modal"><button className="underline font-bold ml-1">Sign in</button></SignInButton> to unlock full access.
+              </p>
             </div>
           </div>
+        )}
+
+        {/* Quick Actions Grid */}
+        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
+          <ActionCard 
+            title="Start Mock Interview" 
+            desc="Practice without saving history" 
+            icon={<Video className="w-6 h-6 text-white" />} 
+            color="bg-blue-500"
+            onClick={() => navigate('/interview')}
+          />
+          
+          {/* Locked / Limited Cards */}
+          <ActionCard 
+            title="Resume Builder" 
+            desc={isSignedIn ? "Manage your resumes" : "Sign in to access"} 
+            icon={isSignedIn ? <FileText className="w-6 h-6 text-white" /> : <Lock className="w-6 h-6 text-white" />} 
+            color={isSignedIn ? "bg-purple-500" : "bg-slate-400"}
+            onClick={() => handleFeatureClick('/resume-builder', true)}
+          />
+          
+          <ActionCard 
+            title="Market Data" 
+            desc="View general trends" 
+            icon={<BarChart2 className="w-6 h-6 text-white" />} 
+            color="bg-green-500"
+            onClick={() => navigate('/market-insights')}
+          />
         </div>
 
-      </div>
-
-      {/* HISTORY LIST */}
-      <div className="max-w-6xl mx-auto">
-        <h3 className="text-2xl font-bold text-gray-800 mb-6 flex items-center gap-2">
-          <TrendingUp size={24} className="text-indigo-600" /> Recent History
-        </h3>
-
-        <div className="space-y-4">
-          {history.length === 0 ? (
-            <div className="text-center py-20 bg-white rounded-3xl border border-dashed border-gray-300">
-              <p className="text-gray-500 text-lg">No interviews yet. Go start one!</p>
+        {/* Feature Sections */}
+        <div className="grid lg:grid-cols-2 gap-8">
+          {/* History / Progress Section - CONDITIONAL RENDER */}
+          {isSignedIn ? (
+            <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+              <h3 className="font-semibold text-lg mb-4">Your History</h3>
+              <div className="space-y-4">
+                 <p className="text-gray-500">No interviews recorded yet.</p>
+                 {/* Map your actual history items here */}
+              </div>
+              <button onClick={() => navigate('/skill-tracker')} className="mt-6 text-blue-600 font-medium text-sm hover:underline">View full history</button>
             </div>
           ) : (
-            history.map((item, index) => (
-              <div 
-                key={item._id} 
-                className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md transition-all flex flex-col md:flex-row md:items-center justify-between gap-4 animate-fade-in-up"
-                style={{ animationDelay: `${index * 100}ms` }}
-              >
-                <div className="flex items-start gap-4">
-                  <div className={`w-12 h-12 rounded-xl flex items-center justify-center font-bold text-xl
-                    ${(item.feedback?.rating || 0) >= 8 ? 'bg-green-100 text-green-700' : 
-                      (item.feedback?.rating || 0) >= 5 ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'}`
-                  }>
-                    {item.feedback?.rating || '-'}
-                  </div>
-                  <div>
-                    <h4 className="font-bold text-gray-900 text-lg">
-                      {item.jsonResume?.topic || "General Interview"}
-                    </h4>
-                    <p className="text-gray-500 text-sm">
-                      {new Date(item.createdAt).toLocaleDateString()} • {new Date(item.createdAt).toLocaleTimeString()}
-                    </p>
-                    {item.feedback?.improvement && (
-                      <p className="text-indigo-600 text-sm mt-1 font-medium">
-                        Focus: {item.feedback.improvement}
-                      </p>
-                    )}
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-6">
-                  {/* Progress Bar Visual */}
-                  <div className="hidden md:block w-32">
-                    <div className="flex justify-between text-xs font-semibold text-gray-400 mb-1">
-                      <span>Score</span>
-                      <span>{item.feedback?.rating}/10</span>
-                    </div>
-                    <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-                      <div 
-                        className="h-full bg-indigo-500 rounded-full transition-all duration-1000 ease-out" 
-                        style={{ width: `${(item.feedback?.rating || 0) * 10}%` }}
-                      ></div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ))
+            <div className="bg-slate-50 p-6 rounded-xl shadow-sm border border-dashed border-slate-300 flex flex-col items-center justify-center text-center">
+              <Lock className="w-12 h-12 text-slate-300 mb-4" />
+              <h3 className="font-semibold text-lg text-slate-700">History is Locked</h3>
+              <p className="text-slate-500 text-sm mt-2 mb-4">Sign in to track your interview progress and skill growth over time.</p>
+              <SignInButton mode="modal">
+                <button className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">Unlock History</button>
+              </SignInButton>
+            </div>
           )}
+
+          {/* This section works for everyone but might be generic for guests */}
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+            <h3 className="font-semibold text-lg mb-4">Trending Roles (Live)</h3>
+            <div className="space-y-3">
+              <JobRole title="Senior Frontend Engineer" company="TechCorp" match={isSignedIn ? 95 : '?'} />
+              <JobRole title="Full Stack Developer" company="StartupX" match={isSignedIn ? 88 : '?'} />
+            </div>
+            <button onClick={() => navigate('/market-insights')} className="mt-6 text-blue-600 font-medium text-sm hover:underline">View market data</button>
+          </div>
         </div>
       </div>
     </div>
   );
 };
+
+// Helper Components
+const SidebarItem = ({ icon, label, active, locked, onClick }) => (
+  <div 
+    onClick={onClick}
+    className={`flex items-center gap-3 p-3 rounded-lg cursor-pointer transition ${
+      active ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+    } ${locked ? 'opacity-50' : ''}`}
+  >
+    {icon}
+    <span className="font-medium">{label}</span>
+    {locked && <Lock size={14} className="ml-auto" />}
+  </div>
+);
+
+const ActionCard = ({ title, desc, icon, color, onClick }) => (
+  <div onClick={onClick} className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition cursor-pointer">
+    <div className={`w-12 h-12 ${color} rounded-lg flex items-center justify-center mb-4 shadow-lg shadow-blue-500/20`}>
+      {icon}
+    </div>
+    <h3 className="font-bold text-lg text-gray-800">{title}</h3>
+    <p className="text-gray-500 text-sm mt-1">{desc}</p>
+  </div>
+);
+
+const JobRole = ({ title, company, match }) => (
+  <div className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
+    <div>
+      <div className="font-medium text-gray-800">{title}</div>
+      <div className="text-xs text-gray-500">{company}</div>
+    </div>
+    <div className={`px-2 py-1 text-xs font-bold rounded ${match === '?' ? 'bg-gray-200 text-gray-500' : 'bg-green-100 text-green-700'}`}>
+      {match === '?' ? 'Login to Match' : `${match}% Match`}
+    </div>
+  </div>
+);
 
 export default Dashboard;

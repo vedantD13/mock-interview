@@ -10,15 +10,17 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@clerk/clerk-react": "^5.59.5",
+    "@clerk/clerk-react": "^5.59.6",
     "@monaco-editor/react": "^4.7.0",
     "@tailwindcss/vite": "^4.1.18",
+    "framer-motion": "^12.29.0",
     "lucide-react": "^0.562.0",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
     "react-markdown": "^10.1.0",
     "react-router-dom": "^7.13.0",
     "react-webcam": "^7.2.0",
+    "recharts": "^3.7.0",
     "tailwindcss": "^4.1.18"
   },
   "devDependencies": {
