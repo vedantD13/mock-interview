@@ -1,52 +1,46 @@
-// client/src/App.jsx
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { useUser } from '@clerk/clerk-react';
-
 import LandingPage from './pages/LandingPage';
 import Dashboard from './pages/Dashboard';
-import Interview from './pages/Interview'; 
+import Interview from './pages/Interview';
 import ResumeBuilder from './pages/ResumeBuilder';
-import MarketInsights from './pages/MarketInsights';
 import SkillTracker from './pages/SkillTracker';
+import MarketInsights from './pages/MarketInsights';
 import CareerPath from './pages/CareerPath';
+import DashboardLayout from './components/DashboardLayout';
 
-// Wrapper for routes that STRICTLY require login (like saving data/profile)
-const ProtectedRoute = ({ children }) => {
-  const { isSignedIn, isLoaded } = useUser();
+const App = () => {
+  const { isLoaded, isSignedIn } = useUser();
 
   if (!isLoaded) {
-    return <div className="flex items-center justify-center min-h-screen">Loading...</div>;
+    return <div className="flex items-center justify-center h-screen">Loading...</div>;
   }
-
-  if (!isSignedIn) {
-    return <Navigate to="/" />;
-  }
-
-  return children;
-};
-
-function App() {
-  const { isSignedIn } = useUser();
 
   return (
     <Router>
       <Routes>
-        <Route path="/" element={<LandingPage />} />
+        {/* PUBLIC ROUTE: Landing Page */}
+        <Route 
+          path="/" 
+          element={isSignedIn ? <Navigate to="/dashboard" replace /> : <LandingPage />} 
+        />
         
-        {/* PUBLIC ROUTES (Guest Access Allowed) */}
-        <Route path="/dashboard" element={<Dashboard />} />
-        <Route path="/interview" element={<Interview />} />
-        <Route path="/market-insights" element={<MarketInsights />} />
-        
-        {/* PROTECTED ROUTES (Login Required) */}
-        {/* We restrict these because they rely heavily on saved user data */}
-        <Route path="/resume-builder" element={<ProtectedRoute><ResumeBuilder /></ProtectedRoute>} />
-        <Route path="/skill-tracker" element={<ProtectedRoute><SkillTracker /></ProtectedRoute>} />
-        <Route path="/career-path" element={<ProtectedRoute><CareerPath /></ProtectedRoute>} />
+        {/* APP ROUTES: Wrapped in Dashboard Layout */}
+        <Route element={<DashboardLayout />}>
+          <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/interview" element={<Interview />} />
+          <Route path="/resume-builder" element={<ResumeBuilder />} />
+          <Route path="/skill-tracker" element={<SkillTracker />} />
+          <Route path="/market-insights" element={<MarketInsights />} />
+          <Route path="/career-path" element={<CareerPath />} />
+        </Route>
+
+        {/* Fallback */}
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Router>
   );
-}
+};
 
 export default App;
