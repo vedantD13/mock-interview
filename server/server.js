@@ -3,79 +3,116 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const bodyParser = require('body-parser');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const Groq = require('groq-sdk');
 
-// Import Models
-// Make sure these files exist in server/models/
-const Interview = require('./models/Interview'); // Your existing model
-const Resume = require('./models/Resume');       // New model
-const Skill = require('./models/Skill');         // New model
-const UserProgress = require('./models/UserProgress'); // New model
+// --- IMPORT MODELS ---
+const Interview = require('./models/Interview'); 
+const Resume = require('./models/Resume');
+const Skill = require('./models/Skill');
+const UserProgress = require('./models/UserProgress');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Middleware
+// --- MIDDLEWARE ---
 app.use(cors());
 app.use(bodyParser.json());
 
-// Database Connection
+// --- DATABASE CONNECTION ---
 mongoose.connect(process.env.MONGODB_URI || "mongodb://localhost:27017/career-ai")
   .then(() => console.log("✅ MongoDB Connected"))
   .catch(err => console.log("❌ MongoDB Error:", err));
 
-// AI Configuration
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+// --- GROQ CONFIGURATION ---
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-/* =========================================
-   FEATURE 1: MOCK INTERVIEW ROUTES
-   (Preserving your core functionality)
-   ========================================= */
 
-// Generate Interview Questions
+/* ==========================================================================
+   FEATURE 1: CHAT & MOCK INTERVIEW ROUTES
+   ========================================================================== */
+
+// 1. CHAT ENDPOINT (Updated Model)
+app.post('/api/chat', async (req, res) => {
+  const { message, history } = req.body;
+  
+  if (!message) return res.status(400).json({ error: "Message required" });
+
+  try {
+    const messages = (history || []).map(msg => ({
+      role: msg.role === 'model' || msg.sender === 'ai' ? 'assistant' : 'user',
+      content: msg.content || msg.text || ""
+    }));
+
+    messages.push({ role: "user", content: message });
+
+    const completion = await groq.chat.completions.create({
+      messages: messages,
+      // UPDATED MODEL: Using the latest fast model
+      model: "llama-3.1-8b-instant", 
+    });
+
+    const reply = completion.choices[0]?.message?.content || "I'm not sure how to respond.";
+    res.json({ reply });
+
+  } catch (error) {
+    console.error("Groq Chat Error:", error);
+    res.status(500).json({ error: "Failed to fetch response", reply: "Offline mode: AI unavailable." });
+  }
+});
+
+// 2. Generate Interview Questions (Updated Model)
 app.post('/api/interview/generate', async (req, res) => {
   const { role, techStack, experience } = req.body;
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-pro" });
-    const prompt = `Generate 5 technical interview questions for a ${role} with ${experience} years experience in ${techStack}. Return valid JSON array of strings.`;
-    
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const text = response.text();
-    // Basic cleanup to ensure JSON
+    const prompt = `Generate 5 technical interview questions for a ${role} with ${experience} years experience in ${techStack}. 
+    Return ONLY a raw JSON array of strings (e.g. ["Question 1", "Question 2"]). Do not output markdown or explanations.`;
+
+    const completion = await groq.chat.completions.create({
+      messages: [{ role: "user", content: prompt }],
+      // UPDATED MODEL: Using the versatile model for better logic
+      model: "llama-3.3-70b-versatile",
+      temperature: 0.5,
+    });
+
+    const text = completion.choices[0]?.message?.content || "[]";
     const jsonStr = text.replace(/```json|```/g, '').trim();
     const questions = JSON.parse(jsonStr);
     
     res.json({ questions });
   } catch (error) {
-    console.error(error);
+    console.error("Groq Generate Error:", error);
     res.status(500).json({ error: "Failed to generate questions" });
   }
 });
 
-// Save Interview & Get Feedback
+// 3. Feedback Analysis (Updated Model)
 app.post('/api/interview/feedback', async (req, res) => {
   const { userId, questions, answers, role } = req.body;
   try {
-    // 1. Generate Feedback using AI
-    const model = genAI.getGenerativeModel({ model: "gemini-pro" });
     const prompt = `
       Analyze this interview for a ${role}.
       Questions: ${JSON.stringify(questions)}
       Answers: ${JSON.stringify(answers)}
       
-      Provide a JSON object with:
-      - rating (number 1-10)
-      - feedback (string summary)
-      - improvements (array of strings)
+      Return valid JSON with these keys:
+      {
+        "rating": (number 1-10),
+        "feedback": (string summary),
+        "improvement": (string specific advice)
+      }
+      Do not use markdown. Just raw JSON.
     `;
 
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const text = response.text().replace(/```json|```/g, '').trim();
+    const completion = await groq.chat.completions.create({
+      messages: [{ role: "user", content: prompt }],
+      // UPDATED MODEL: Using the versatile model for complex analysis
+      model: "llama-3.3-70b-versatile",
+      response_format: { type: "json_object" } 
+    });
+
+    const text = completion.choices[0]?.message?.content;
     const feedbackData = JSON.parse(text);
 
-    // 2. Save to Database
     const interview = await Interview.create({
       userId,
       role,
@@ -86,7 +123,6 @@ app.post('/api/interview/feedback', async (req, res) => {
       date: new Date()
     });
 
-    // 3. Update User Streak/XP (Gamification Integration)
     await UserProgress.findOneAndUpdate(
       { userId },
       { $inc: { xp: 100 }, $set: { lastActivity: new Date() } },
@@ -95,12 +131,12 @@ app.post('/api/interview/feedback', async (req, res) => {
 
     res.json(interview);
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: "Failed to process interview" });
+    console.error("Groq Feedback Error:", error);
+    res.status(500).json({ error: "Failed to process feedback" });
   }
 });
 
-// Get Past Interviews
+// 4. Get History
 app.get('/api/interview/history/:userId', async (req, res) => {
   try {
     const history = await Interview.find({ userId: req.params.userId }).sort({ date: -1 });
@@ -111,27 +147,20 @@ app.get('/api/interview/history/:userId', async (req, res) => {
 });
 
 
-/* =========================================
-   FEATURE 2: RESUME BUILDER ROUTES
-   ========================================= */
+/* ==========================================================================
+   FEATURE 2: AI RESUME BUILDER
+   ========================================================================== */
 
-// Get Resume
 app.get('/api/resume/:userId', async (req, res) => {
   try {
     let resume = await Resume.findOne({ userId: req.params.userId });
-    if (!resume) {
-      resume = await Resume.create({ 
-        userId: req.params.userId,
-        personal: {}, experience: [], skills: [] 
-      });
-    }
+    if (!resume) resume = await Resume.create({ userId: req.params.userId, personal: {}, experience: [], skills: [] });
     res.json(resume);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Save Resume
 app.post('/api/resume/save', async (req, res) => {
   const { userId, personal, experience, skills } = req.body;
   try {
@@ -140,60 +169,47 @@ app.post('/api/resume/save', async (req, res) => {
       { personal, experience, skills },
       { new: true, upsert: true }
     );
-    // Award XP for updating resume
-    await UserProgress.findOneAndUpdate(
-       { userId },
-       { $inc: { xp: 20 } },
-       { upsert: true }
-    );
+    await UserProgress.findOneAndUpdate({ userId }, { $inc: { xp: 20 } }, { upsert: true });
     res.json(updated);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// AI Optimize Resume
 app.post('/api/resume/optimize', async (req, res) => {
   const { currentResume } = req.body;
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-pro" });
-    const prompt = `
-      Act as an expert Resume Writer. Optimize the following professional summary to be more impactful, 
-      action-oriented, and tailored for a tech role. Keep it under 50 words.
-      Current Summary: "${currentResume.personal.summary}"
-    `;
+    const prompt = `Optimize this professional summary for a tech resume. Make it impactful and under 50 words: "${currentResume.personal.summary}"`;
     
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    res.json({ optimizedSummary: response.text() });
+    const completion = await groq.chat.completions.create({
+      messages: [{ role: "user", content: prompt }],
+      // UPDATED MODEL
+      model: "llama-3.1-8b-instant",
+    });
+
+    res.json({ optimizedSummary: completion.choices[0]?.message?.content });
   } catch (err) {
-    console.error("AI Error:", err);
-    res.status(500).json({ error: "Failed to generate AI content" });
+    console.error(err);
+    res.status(500).json({ error: "Groq Generation Failed" });
   }
 });
 
 
-/* =========================================
-   FEATURE 3: SKILL TRACKER & GAMIFICATION
-   ========================================= */
+/* ==========================================================================
+   FEATURE 3 & 4: SKILLS & MARKET DATA
+   ========================================================================== */
 
-// Get Skills & Progress
 app.get('/api/skills/:userId', async (req, res) => {
   try {
     const skills = await Skill.find({ userId: req.params.userId });
     let progress = await UserProgress.findOne({ userId: req.params.userId });
-    
-    if (!progress) {
-      progress = await UserProgress.create({ userId: req.params.userId, xp: 0, streak: 1 });
-    }
-
+    if (!progress) progress = await UserProgress.create({ userId: req.params.userId, xp: 0, streak: 1 });
     res.json({ skills, xp: progress.xp, streak: progress.streak });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Add New Skill
 app.post('/api/skills', async (req, res) => {
   const { userId, name, category, level, goal } = req.body;
   try {
@@ -204,32 +220,18 @@ app.post('/api/skills', async (req, res) => {
   }
 });
 
-// Update Skill Progress (XP Boost)
 app.put('/api/skills/:id/progress', async (req, res) => {
   const { userId, level } = req.body;
   try {
     const skill = await Skill.findByIdAndUpdate(req.params.id, { level }, { new: true });
-    
-    // Award 10 XP for practicing
-    const progress = await UserProgress.findOneAndUpdate(
-      { userId },
-      { $inc: { xp: 10 } },
-      { new: true }
-    );
-
+    const progress = await UserProgress.findOneAndUpdate({ userId }, { $inc: { xp: 10 } }, { new: true });
     res.json({ skill, xp: progress.xp });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-
-/* =========================================
-   FEATURE 4: MARKET INSIGHTS
-   ========================================= */
-
 app.get('/api/market-insights', (req, res) => {
-  //  - Can be visualized in frontend
   res.json({
     salaryData: [
       { name: 'Jr. Dev', salary: 65000 },
@@ -248,7 +250,6 @@ app.get('/api/market-insights', (req, res) => {
   });
 });
 
-// Start Server
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });

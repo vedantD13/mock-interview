@@ -153,40 +153,55 @@ const Interview = () => {
 
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, isTyping]);
 
-  // --- 6. SEND MESSAGE (With Fallback) ---
+  // --- 6. SEND MESSAGE (Fixed) ---
   const sendMessage = async (manualText = null) => {
     const textToSend = manualText || input;
     if (!textToSend.trim()) return;
 
+    // 1. Update UI immediately
     const userMsg = { id: Date.now(), sender: 'user', text: textToSend };
     setMessages(prev => [...prev, userMsg]);
     if (!manualText) setInput('');
     setIsTyping(true);
 
     try {
+      // 2. Prepare History for Backend
+      // We map 'ai' -> 'model' because Google Gemini specifically requires 'model' role
+      const historyPayload = messages.map(msg => ({
+        role: msg.sender === 'ai' ? 'model' : 'user',
+        content: msg.text
+      }));
+
+      // 3. Send Request
       const response = await fetch('http://localhost:5000/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId: sessionId || 'guest_session', userMessage: userMsg.text })
+        body: JSON.stringify({ 
+            message: textToSend,       // <--- FIXED: Was 'userMessage'
+            history: historyPayload    // <--- FIXED: Added history so AI remembers context
+        })
       });
       
-      if (!response.ok) throw new Error("Backend not available");
+      if (!response.ok) throw new Error("Backend error");
 
       const data = await response.json();
-      if (response.ok) {
-        if (data.sessionId && data.sessionId !== sessionId) setSessionId(data.sessionId);
+      
+      // 4. Handle Success
+      if (data.reply) {
         setMessages(prev => [...prev, { id: Date.now() + 1, sender: 'ai', text: data.reply }]);
         speak(data.reply);
-        if (data.reply.toLowerCase().includes("code")) setActiveTab('code');
+        
+        // Auto-switch to code tab if AI mentions code
+        if (data.reply.toLowerCase().includes("code") || data.reply.toLowerCase().includes("function")) {
+            setActiveTab('code');
+        }
       }
     } catch (error) { 
-        // Fallback if backend is offline so chat doesn't freeze
-        console.error("Chat Error (Using Fallback):", error); 
-        setTimeout(() => {
-            const fallbackMsg = "I am currently running in offline mode. Please continue with the coding challenge.";
-            setMessages(prev => [...prev, { id: Date.now() + 1, sender: 'ai', text: fallbackMsg }]);
-            speak(fallbackMsg);
-        }, 1000);
+        console.error("Chat Error:", error);
+        // Fallback message
+        const fallbackMsg = "I'm having trouble connecting to the server. Please check if your backend terminal is running.";
+        setMessages(prev => [...prev, { id: Date.now() + 1, sender: 'ai', text: fallbackMsg }]);
+        speak(fallbackMsg);
     } finally { 
         setIsTyping(false); 
     }
