@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate, Navigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { useUser, SignInButton } from '@clerk/clerk-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
@@ -240,7 +240,8 @@ const LandingPage = () => {
     if (element) element.scrollIntoView({ behavior: 'smooth' });
   };
 
-  if (isSignedIn) return <Navigate to="/dashboard" />;
+  // REMOVED: The redirect logic that was preventing signed-in users from seeing the landing page.
+  // if (isSignedIn) return <Navigate to="/dashboard" />;
 
   return (
     <div className="min-h-screen bg-slate-950 text-white overflow-hidden font-sans selection:bg-blue-500/30">
@@ -265,10 +266,21 @@ const LandingPage = () => {
             <button onClick={() => scrollToSection('about')} className="text-slate-400 hover:text-white transition flex items-center gap-1"><Users size={16} /> About</button>
           </div>
           <div className="flex items-center gap-4">
-            <button onClick={() => navigate('/dashboard')} className="text-slate-300 hover:text-white transition hidden sm:block font-medium">Guest Mode</button>
-            <SignInButton mode="modal">
-              <button className="px-5 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-full font-bold text-sm transition-all shadow-lg shadow-blue-500/20">Sign In</button>
-            </SignInButton>
+            {isSignedIn ? (
+                <button 
+                onClick={() => navigate('/dashboard')} 
+                className="px-5 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-full font-bold text-sm transition-all shadow-lg shadow-blue-500/20"
+                >
+                Go to Dashboard
+                </button>
+            ) : (
+                <>
+                <button onClick={() => navigate('/dashboard')} className="text-slate-300 hover:text-white transition hidden sm:block font-medium">Guest Mode</button>
+                <SignInButton mode="modal">
+                    <button className="px-5 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-full font-bold text-sm transition-all shadow-lg shadow-blue-500/20">Sign In</button>
+                </SignInButton>
+                </>
+            )}
           </div>
         </div>
       </nav>
