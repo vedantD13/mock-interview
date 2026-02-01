@@ -6,7 +6,7 @@ const bodyParser = require('body-parser');
 const Groq = require('groq-sdk');
 
 // --- IMPORT MODELS ---
-// Ensure you have created these files in server/models/
+// Ensure these files exist in server/models/
 const Interview = require('./models/Interview'); 
 const Resume = require('./models/Resume');
 const Skill = require('./models/Skill');
@@ -28,18 +28,55 @@ mongoose.connect(process.env.MONGODB_URI || "mongodb://localhost:27017/career-ai
 // --- GROQ CONFIGURATION ---
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-// --- UTILS: STREAK CALCULATOR ---
+// --- CONSTANTS: XP SHOP ITEMS ---
+const SHOP_ITEMS = [
+    // THEMES
+    { id: 'theme-light', name: 'Standard Light', type: 'theme', cost: 0, description: 'Default bright theme.', icon: 'Sun' },
+    { id: 'theme-dracula', name: 'Dracula', type: 'theme', cost: 300, description: 'A dark theme for vampires.', icon: 'Moon' },
+    { id: 'theme-monokai', name: 'Monokai', type: 'theme', cost: 400, description: 'Vibrant and contrasty.', icon: 'Palette' },
+    { id: 'theme-nord', name: 'Nord', type: 'theme', cost: 450, description: 'An arctic, north-bluish palette.', icon: 'Snowflake' },
+    { id: 'theme-matrix', name: 'The Matrix', type: 'theme', cost: 500, description: 'Green code raining down.', icon: 'Terminal' },
+    { id: 'theme-cyberpunk', name: 'Cyberpunk 2077', type: 'theme', cost: 1000, description: 'Neon pinks and deep blues.', icon: 'Zap' },
+    
+    // TITLES
+    { id: 'title-novice', name: 'Novice', type: 'title', cost: 0, description: 'The journey begins.', icon: 'Sprout' },
+    { id: 'title-bug-hunter', name: 'Bug Hunter', type: 'title', cost: 200, description: 'Squashing bugs for fun.', icon: 'Bug' },
+    { id: 'title-stack-overflow', name: 'Stack Overflow VIP', type: 'title', cost: 500, description: 'Ctrl+C, Ctrl+V expert.', icon: 'Copy' },
+    { id: 'title-algo-wizard', name: 'Algo Wizard', type: 'title', cost: 800, description: 'Master of complexity.', icon: 'Wand' },
+    { id: 'title-senior-dev', name: '10x Engineer', type: 'title', cost: 2000, description: 'Highly efficient.', icon: 'Rocket' },
+    { id: 'title-architect', name: 'System Architect', type: 'title', cost: 5000, description: 'Draws boxes and arrows.', icon: 'Ruler' },
+];
+
+// --- UTILS: STREAK & PROGRESS CALCULATOR ---
 const updateStreak = async (userId) => {
   let progress = await UserProgress.findOne({ userId });
+  
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  
   if (!progress) {
-    progress = await UserProgress.create({ userId, xp: 0, streak: 1, lastActivity: new Date() });
+    progress = await UserProgress.create({ 
+      userId, 
+      xp: 0, 
+      lifetimeXP: 0, 
+      streak: 1, 
+      lastActivity: now,
+      inventory: ['theme-light', 'title-novice'],
+      equipped: { theme: 'light', title: 'Novice' }
+    });
     return progress;
   }
 
-  const now = new Date();
-  const last = new Date(progress.lastActivity);
-  const diffTime = Math.abs(now - last);
-  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
+  // MIGRATION: Ensure lifetimeXP and shop fields exist
+  if (progress.lifetimeXP === undefined) progress.lifetimeXP = progress.xp;
+  if (!progress.inventory) progress.inventory = ['theme-light', 'title-novice'];
+  if (!progress.equipped) progress.equipped = { theme: 'light', title: 'Novice' };
+
+  const lastActivity = new Date(progress.lastActivity);
+  const lastDate = new Date(lastActivity.getFullYear(), lastActivity.getMonth(), lastActivity.getDate());
+
+  const diffTime = today - lastDate;
+  const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24)); 
 
   if (diffDays === 1) {
     progress.streak += 1;
@@ -53,7 +90,7 @@ const updateStreak = async (userId) => {
 };
 
 /* ==========================================================================
-   FEATURE 1: CHAT & MOCK INTERVIEW ROUTES
+   FEATURE 1: CHAT & MOCK INTERVIEW ROUTES (Restored)
    ========================================================================== */
 
 // 1. CHAT ENDPOINT
@@ -144,11 +181,13 @@ app.post('/api/interview/feedback', async (req, res) => {
       date: new Date()
     });
 
+    // Add XP for completing interview
     await UserProgress.findOneAndUpdate(
       { userId },
-      { $inc: { xp: 100 }, $set: { lastActivity: new Date() } },
+      { $inc: { xp: 100, lifetimeXP: 100 }, $set: { lastActivity: new Date() } },
       { upsert: true }
     );
+    await updateStreak(userId);
 
     res.json(interview);
   } catch (error) {
@@ -168,7 +207,7 @@ app.get('/api/interview/history/:userId', async (req, res) => {
 });
 
 /* ==========================================================================
-   FEATURE 2: AI RESUME BUILDER
+   FEATURE 2: AI RESUME BUILDER ROUTES (Restored)
    ========================================================================== */
 
 // Get Resume
@@ -191,7 +230,13 @@ app.post('/api/resume/save', async (req, res) => {
       { personal, experience, education, skills },
       { new: true, upsert: true }
     );
-    await UserProgress.findOneAndUpdate({ userId }, { $inc: { xp: 20 } }, { upsert: true });
+    // Add XP for saving resume
+    await UserProgress.findOneAndUpdate(
+      { userId }, 
+      { $inc: { xp: 20, lifetimeXP: 20 }, $set: { lastActivity: new Date() } }, 
+      { upsert: true }
+    );
+    await updateStreak(userId);
     res.json(updated);
   } catch (err) {
     console.error("Resume Save Error:", err);
@@ -246,63 +291,140 @@ app.post('/api/resume/optimize', async (req, res) => {
 });
 
 /* ==========================================================================
-   FEATURE 3: SKILLS TRACKER
+   FEATURE 3: SKILLS TRACKER & GAMIFICATION
    ========================================================================== */
 
-// 1. GET Skills
+// 1. GET Skills & User Progress (With Sticky Rank)
 app.get('/api/skills/:userId', async (req, res) => {
   try {
     const skills = await Skill.find({ userId: req.params.userId }).sort({ lastPracticed: -1 });
-    // Calculate XP based on levels
-    const xp = skills.reduce((acc, skill) => acc + (skill.level * 10), 0);
-    res.json({ skills, xp, streak: 5 });
+    
+    let progress = await UserProgress.findOne({ userId: req.params.userId });
+    
+    // Create default progress if missing
+    if (!progress) {
+        progress = await UserProgress.create({ 
+            userId: req.params.userId, 
+            xp: 0, 
+            lifetimeXP: 0, 
+            streak: 0, 
+            lastActivity: new Date(),
+            inventory: ['theme-light', 'title-novice'],
+            equipped: { theme: 'light', title: 'Novice' }
+        });
+    }
+
+    // Migration fixes for existing users
+    if (progress.lifetimeXP === undefined) {
+       progress.lifetimeXP = progress.xp;
+       await progress.save();
+    }
+    if (!progress.inventory) {
+        progress.inventory = ['theme-light', 'title-novice'];
+        progress.equipped = { theme: 'light', title: 'Novice' };
+        await progress.save();
+    }
+
+    const rank = Math.floor(progress.lifetimeXP / 100) + 1;
+    const rankProgress = progress.lifetimeXP % 100;
+
+    res.json({ 
+        skills, 
+        xp: progress.xp, 
+        rank, 
+        rankProgress,
+        streak: progress.streak,
+        inventory: progress.inventory,
+        equipped: progress.equipped
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Server error fetching skills" });
   }
 });
 
-// 2. CREATE Skill
-app.post('/api/skills', async (req, res) => {
+// 2. ADD XP (Passing challenges)
+app.post('/api/user/add-xp', async (req, res) => {
+    const { userId, amount } = req.body;
+    try {
+        const progress = await UserProgress.findOneAndUpdate(
+            { userId },
+            { $inc: { xp: amount, lifetimeXP: amount } },
+            { new: true, upsert: true }
+        );
+        res.json({ success: true, newXP: progress.xp, newLifetimeXP: progress.lifetimeXP });
+    } catch (err) {
+        res.status(500).json({ error: "Failed to add XP" });
+    }
+});
+
+// 3. DEDUCT XP (Buying hints - affects Balance only, not Rank)
+app.post('/api/user/deduct-xp', async (req, res) => {
+  const { userId, amount } = req.body;
   try {
-    const { userId, name, category, level, target, resources } = req.body;
-    
-    if (!userId || !name) {
-      return res.status(400).json({ error: "Missing required fields" });
+    const progress = await UserProgress.findOne({ userId });
+    if (!progress) return res.status(404).json({ error: "User not found" });
+
+    if (progress.xp < amount) {
+      return res.status(400).json({ error: "Insufficient XP", currentXP: progress.xp });
     }
 
+    progress.xp -= amount;
+    await progress.save();
+    res.json({ success: true, newXP: progress.xp });
+  } catch (err) {
+    console.error("XP Deduction Error:", err);
+    res.status(500).json({ error: "Failed to deduct XP" });
+  }
+});
+
+// 4. PENALIZE (Cheating - affects everything)
+app.post('/api/user/penalize', async (req, res) => {
+    const { userId, amount } = req.body;
+    try {
+      const progress = await UserProgress.findOne({ userId });
+      if (progress) {
+          progress.xp = Math.max(0, progress.xp - amount);
+          progress.lifetimeXP = Math.max(0, progress.lifetimeXP - amount);
+          await progress.save();
+      }
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: "Penalty failed" });
+    }
+  });
+
+// --- SKILL CRUD ROUTES ---
+
+app.post('/api/skills', async (req, res) => {
+  try {
+    const { userId, name, category, level, target, resources, prerequisites } = req.body;
+    if (!userId || !name) return res.status(400).json({ error: "Missing required fields" });
+
     const newSkill = new Skill({
-      userId,
-      name,
-      category: category || 'Tools',
-      level: level || 0,
-      target: target || 'Intermediate',
-      resources: resources || []
+      userId, name, category: category || 'Tools', level: level || 0,
+      target: target || 'Intermediate', resources: resources || [],
+      lastPracticed: new Date(),
+      prerequisites: prerequisites || []
     });
 
     const savedSkill = await newSkill.save();
+    await updateStreak(userId);
     res.json(savedSkill);
   } catch (err) {
-    console.error("Save Error:", err);
     res.status(400).json({ error: err.message });
   }
 });
 
-// 3. UPDATE Skill
 app.put('/api/skills/:id', async (req, res) => {
   try {
-    const updatedSkill = await Skill.findByIdAndUpdate(
-      req.params.id,
-      { $set: req.body },
-      { new: true } 
-    );
+    const updatedSkill = await Skill.findByIdAndUpdate(req.params.id, { $set: req.body }, { new: true });
     res.json(updatedSkill);
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
 });
 
-// 4. DELETE Skill
 app.delete('/api/skills/:id', async (req, res) => {
   try {
     await Skill.findByIdAndDelete(req.params.id);
@@ -313,193 +435,181 @@ app.delete('/api/skills/:id', async (req, res) => {
 });
 
 /* ==========================================================================
-   FEATURE 4: AI CHALLENGES & RESOURCES (FIXED MODELS)
+   FEATURE 6: XP SHOP ROUTES
    ========================================================================== */
 
-// AI Skill Gap Analysis
+app.get('/api/shop/items', (req, res) => {
+    res.json(SHOP_ITEMS);
+});
+
+app.post('/api/shop/buy', async (req, res) => {
+    const { userId, itemId } = req.body;
+    try {
+        const item = SHOP_ITEMS.find(i => i.id === itemId);
+        if(!item) return res.status(404).json({ error: "Item not found" });
+
+        const user = await UserProgress.findOne({ userId });
+        if(!user) return res.status(404).json({ error: "User not found" });
+
+        if(user.inventory.includes(itemId)) {
+            return res.status(400).json({ error: "Already owned" });
+        }
+
+        if(user.xp < item.cost) {
+            return res.status(400).json({ error: "Insufficient XP" });
+        }
+
+        user.xp -= item.cost;
+        user.inventory.push(itemId);
+        await user.save();
+
+        res.json({ success: true, newXP: user.xp, inventory: user.inventory });
+
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/shop/equip', async (req, res) => {
+    const { userId, itemId, type } = req.body;
+    try {
+        const user = await UserProgress.findOne({ userId });
+        if(!user) return res.status(404).json({ error: "User not found" });
+
+        if(!user.inventory.includes(itemId)) {
+            return res.status(403).json({ error: "You do not own this item" });
+        }
+
+        const itemDef = SHOP_ITEMS.find(i => i.id === itemId);
+        
+        if (type === 'theme') user.equipped.theme = itemId;
+        if (type === 'title') user.equipped.title = itemDef.name;
+        
+        await user.save();
+        res.json({ success: true, equipped: user.equipped });
+
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+
+/* ==========================================================================
+   FEATURE 4: AI CHALLENGES & RESOURCES
+   ========================================================================== */
+
 app.post('/api/ai/skill-gap', async (req, res) => {
   const { currentSkills, targetRole } = req.body;
   try {
     const prompt = `I am a ${targetRole}. My current skills: ${currentSkills.join(', ')}.
-    Identify 3-5 critical missing skills. Return JSON array: [{"name": "Skill", "category": "Tools"}]`;
+    Identify 3-5 critical missing skills. 
+    You MUST return a JSON object with a single key "suggestions" containing an array.
+    Each item must have a "name" and a "category".
+    Example: { "suggestions": [{"name": "Skill Name", "category": "Category Name"}] }`;
 
-    const completion = await groq.chat.completions.create({
-      messages: [{ role: "user", content: prompt }],
-      model: "llama-3.3-70b-versatile",
-    });
-
-    const content = completion.choices[0]?.message?.content || "[]";
-    const jsonStr = content.replace(/```json|```/g, '').trim();
-    res.json({ suggestions: JSON.parse(jsonStr) });
-  } catch (error) {
-    console.error("AI Skill Gap Error:", error);
-    res.status(500).json({ error: "Failed to analyze skill gap" });
-  }
-});
-
-// ... existing imports and setup
-
-// ... (Previous imports and setup remain the same)
-
-// --- AI ROUTES (UPDATED FOR 20 LEVELS) ---
-
-// 1. GENERATE CHALLENGE
-app.post('/api/ai/generate-challenge', async (req, res) => {
-  const { skill, level } = req.body;
-  
-  // Expanded Difficulty Map for 20 Levels
-  const difficulties = [
-    "Novice", "Novice", "Beginner", "Beginner", "BOSS: Basic Competency", // 1-5
-    "Intermediate", "Intermediate", "Adept", "Adept", "BOSS: Problem Solving", // 6-10
-    "Advanced", "Advanced", "Expert", "Expert", "BOSS: System Design", // 11-15
-    "Master", "Master", "Grandmaster", "Grandmaster", "FINAL BOSS: Legend" // 16-20
-  ];
-  
-  const difficulty = difficulties[Math.min(level - 1, 19)];
-  const isBoss = level % 5 === 0;
-
-  try {
     const completion = await groq.chat.completions.create({
       messages: [
-        {
-          role: "system",
-          content: `You are a Game Master for a coding RPG. 
-          Generate a ${isBoss ? "HIGH STAKES BOSS BATTLE" : "standard"} coding challenge for ${skill}.
-          Difficulty: Level ${level} (${difficulty}).
-          
-          ${isBoss ? "For this BOSS LEVEL, make the scenario epic, the problem complex, and edge cases tricky." : "Keep it educational but fun."}
-
-          Return ONLY a raw JSON object (no markdown) with this format:
-          {
-            "title": "RPG Style Title",
-            "description": "Story-driven problem statement.",
-            "starterCode": "// Starter code here"
-          }`
-        },
-        { role: "user", content: `Generate level ${level} challenge for ${skill}.` }
+        { role: "system", content: "You are a career coach. Output strictly valid JSON only." },
+        { role: "user", content: prompt }
       ],
       model: "llama-3.3-70b-versatile",
-      temperature: 0.6, // Slightly higher for creativity in boss titles
+      response_format: { type: "json_object" }
     });
 
     const content = completion.choices[0]?.message?.content || "{}";
-    const cleanJson = content.replace(/```json/g, "").replace(/```/g, "").trim();
-    res.json(JSON.parse(cleanJson));
+    const parsedData = JSON.parse(content);
+    let rawSuggestions = Array.isArray(parsedData) ? parsedData : (parsedData.suggestions || []);
+    
+    // Normalize data
+    const suggestions = rawSuggestions.map(s => {
+        if (typeof s === 'string') return { name: s, category: 'Recommended' };
+        return {
+            name: s.name || s.skill || s.tool || "Unknown Skill",
+            category: s.category || 'Recommended'
+        };
+    });
 
-  } catch (err) {
-    console.error("AI Challenge Error:", err.message);
-    res.status(500).json({ error: "Failed to generate challenge" });
+    res.json({ suggestions });
+  } catch (error) {
+    console.error("AI Skill Gap Error:", error);
+    res.json({ suggestions: [] });
   }
 });
 
-// --- 2. VALIDATE CHALLENGE (Updated for Star Rating) ---
-app.post('/api/ai/validate-challenge', async (req, res) => {
-  const { question, userAnswer } = req.body;
-
+app.post('/api/ai/generate-challenge', async (req, res) => {
+  const { skill, level } = req.body;
+  const difficulties = ["Novice", "Novice", "Beginner", "Beginner", "BOSS: Basic", "Intermediate", "Intermediate", "Adept", "Adept", "BOSS: Problem Solving", "Advanced", "Advanced", "Expert", "Expert", "BOSS: System Design", "Master", "Master", "Grandmaster", "Grandmaster", "FINAL BOSS"];
+  const difficulty = difficulties[Math.min(level - 1, 19)];
+  
   try {
     const completion = await groq.chat.completions.create({
       messages: [
         {
           role: "system",
-          content: `Evaluate the code. Return ONLY raw JSON:
-          {
-            "passed": boolean,
-            "stars": number (1 = barely passed, 2 = good, 3 = optimal/clean code, 0 if failed),
-            "feedback": "Encouraging game-style feedback.",
-            "newXP": number (base 100 * stars)
-          }`
+          content: `Generate a coding challenge for ${skill} at level ${level} (${difficulty}).
+          Return JSON object: { "title": "...", "description": "...", "starterCode": "...", "hints": ["hint1", "hint2"] }`
         },
+        { role: "user", content: `Generate challenge` }
+      ],
+      model: "llama-3.3-70b-versatile",
+      temperature: 0.6, 
+      response_format: { type: "json_object" }
+    });
+    res.json(JSON.parse(completion.choices[0]?.message?.content || "{}"));
+  } catch (err) {
+    res.status(500).json({ error: "Failed" });
+  }
+});
+
+app.post('/api/ai/validate-challenge', async (req, res) => {
+  const { question, userAnswer, level } = req.body;
+  try {
+    const completion = await groq.chat.completions.create({
+      messages: [
         {
-          role: "user",
-          content: `Question: ${question}\nUser Code: ${userAnswer}`
-        }
+            role: "system", 
+            content: `Evaluate code. Return JSON: { "passed": boolean, "stars": number, "feedback": "string" }` 
+        },
+        { role: "user", content: `Q: ${question}\nCode: ${userAnswer}` }
       ],
       model: "llama-3.3-70b-versatile",
       temperature: 0.1,
+      response_format: { type: "json_object" }
     });
 
-    const content = completion.choices[0]?.message?.content || "{}";
-    const cleanJson = content.replace(/```json/g, "").replace(/```/g, "").trim();
-    const result = JSON.parse(cleanJson);
-
+    const result = JSON.parse(completion.choices[0]?.message?.content || "{}");
+    if (result.passed) {
+        result.newXP = (level || 1) * 100;
+    } else {
+        result.newXP = 0;
+    }
     res.json(result);
-
   } catch (err) {
-    console.error("AI Validate Error:", err.message);
     res.status(500).json({ error: "Validation failed" });
   }
 });
 
-// Recommend Resources (Fixing "Invalid Link" & Crash issue)
 app.post('/api/ai/recommend-resources', async (req, res) => {
-  const { skill } = req.body;
-  if (!skill) return res.status(400).json({ error: 'Skill name required' });
-
-  try {
-    const completion = await groq.chat.completions.create({
-      messages: [
-        {
-          role: "system",
-          content: `You are a helpful education assistant.
-          Generate 3 high-quality learning resources for: ${skill}.
-          
-          Instead of guessing specific video IDs (which fail), construct SMART SEARCH URLs.
-          
-          Return ONLY a raw JSON array. Format:
-          [
-            { "title": "Official Docs", "url": "https://www.google.com/search?q=${skill}+official+documentation" },
-            { "title": "YouTube Crash Course", "url": "https://www.youtube.com/results?search_query=${skill}+crash+course" },
-            { "title": "Interactive Tutorial", "url": "https://www.google.com/search?q=${skill}+interactive+tutorial" }
-          ]`
-        },
-        { role: "user", content: `Resources for ${skill}` }
-      ],
-      model: "llama-3.3-70b-versatile", // UPDATED
-      temperature: 0.1,
-    });
-
-    const content = completion.choices[0]?.message?.content || "[]";
-    const cleanJson = content.replace(/```json/g, "").replace(/```/g, "").trim();
-    
-    let suggestions = [];
+    const { skill } = req.body;
     try {
-      suggestions = JSON.parse(cleanJson);
-    } catch (e) {
-      console.error("JSON Parse Error", e);
-      suggestions = [];
+      const completion = await groq.chat.completions.create({
+        messages: [{ role: "user", content: `Generate 3 learning resources for ${skill} as JSON: { "resources": [{ "title": "...", "url": "..." }] }` }],
+        model: "llama-3.3-70b-versatile",
+        response_format: { type: "json_object" }
+      });
+      const data = JSON.parse(completion.choices[0]?.message?.content || "{}");
+      res.json({ resources: data.resources || [] });
+    } catch (err) {
+      res.json({ resources: [] });
     }
-
-    // Safety: Filter out bad objects
-    const validSuggestions = Array.isArray(suggestions) 
-      ? suggestions.filter(s => s && s.title && s.url) 
-      : [];
-
-    res.json({ resources: validSuggestions });
-
-  } catch (err) {
-    console.error("AI Resource Error:", err.message);
-    res.json({ resources: [] }); // Safe empty array on error
-  }
 });
 
-// Market Insights Data
 app.get('/api/market-insights', (req, res) => {
-  res.json({
-    salaryData: [
-      { name: 'Jr. Dev', salary: 65000 },
-      { name: 'Mid Dev', salary: 98000 },
-      { name: 'Sr. Dev', salary: 145000 },
-      { name: 'Lead', salary: 190000 },
-    ],
-    demandData: [
-      { month: 'Jan', demand: 4200 },
-      { month: 'Feb', demand: 3800 },
-      { month: 'Mar', demand: 5500 },
-      { month: 'Apr', demand: 5100 },
-      { month: 'May', demand: 6700 },
-    ],
-    hotSkills: ["React", "Node.js", "Python", "AWS", "Docker", "Kubernetes", "TypeScript"]
-  });
+    res.json({
+      salaryData: [ { name: 'Jr', salary: 65000 }, { name: 'Sr', salary: 145000 } ],
+      demandData: [ { month: 'Jan', demand: 4200 }, { month: 'May', demand: 6700 } ],
+      hotSkills: ["React", "Node.js", "Python"]
+    });
 });
 
 app.listen(PORT, () => {
