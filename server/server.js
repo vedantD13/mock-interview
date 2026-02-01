@@ -6,6 +6,7 @@ const bodyParser = require('body-parser');
 const Groq = require('groq-sdk');
 
 // --- IMPORT MODELS ---
+// Ensure you have created these files in server/models/
 const Interview = require('./models/Interview'); 
 const Resume = require('./models/Resume');
 const Skill = require('./models/Skill');
@@ -16,7 +17,6 @@ const PORT = process.env.PORT || 5000;
 
 // --- MIDDLEWARE ---
 app.use(cors());
-// Increased limit to 50mb to handle profile image uploads
 app.use(bodyParser.json({ limit: '50mb' }));
 app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }));
 
@@ -28,8 +28,7 @@ mongoose.connect(process.env.MONGODB_URI || "mongodb://localhost:27017/career-ai
 // --- GROQ CONFIGURATION ---
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-// --- UTILS: STREAK CALCULATOR (NEW) ---
-// This function handles the logic for daily streaks and penalties
+// --- UTILS: STREAK CALCULATOR ---
 const updateStreak = async (userId) => {
   let progress = await UserProgress.findOne({ userId });
   if (!progress) {
@@ -42,10 +41,6 @@ const updateStreak = async (userId) => {
   const diffTime = Math.abs(now - last);
   const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
 
-  // Logic: 
-  // 1 day diff = streak continues
-  // >1 day diff = streak broken (penalty: reset to 1)
-  // 0 day diff = same day login, no change
   if (diffDays === 1) {
     progress.streak += 1;
   } else if (diffDays > 1) {
@@ -56,7 +51,6 @@ const updateStreak = async (userId) => {
   await progress.save();
   return progress;
 };
-
 
 /* ==========================================================================
    FEATURE 1: CHAT & MOCK INTERVIEW ROUTES
@@ -173,7 +167,6 @@ app.get('/api/interview/history/:userId', async (req, res) => {
   }
 });
 
-
 /* ==========================================================================
    FEATURE 2: AI RESUME BUILDER
    ========================================================================== */
@@ -252,47 +245,64 @@ app.post('/api/resume/optimize', async (req, res) => {
   }
 });
 
-
 /* ==========================================================================
-   FEATURE 3 & 4: SKILLS & MARKET DATA (UPDATED FOR SKILL TRACKER)
+   FEATURE 3: SKILLS TRACKER
    ========================================================================== */
 
-// Get Skills
+// 1. GET Skills
 app.get('/api/skills/:userId', async (req, res) => {
   try {
-    const skills = await Skill.find({ userId: req.params.userId });
-    let progress = await UserProgress.findOne({ userId: req.params.userId });
-    if (!progress) progress = await UserProgress.create({ userId: req.params.userId, xp: 0, streak: 1 });
-    res.json({ skills, xp: progress.xp, streak: progress.streak });
+    const skills = await Skill.find({ userId: req.params.userId }).sort({ lastPracticed: -1 });
+    // Calculate XP based on levels
+    const xp = skills.reduce((acc, skill) => acc + (skill.level * 10), 0);
+    res.json({ skills, xp, streak: 5 });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error(err);
+    res.status(500).json({ error: "Server error fetching skills" });
   }
 });
 
-// Add New Skill
+// 2. CREATE Skill
 app.post('/api/skills', async (req, res) => {
-  const { userId, name, category, level, goal } = req.body;
   try {
-    const newSkill = await Skill.create({ userId, name, category, level, goal });
-    res.json(newSkill);
+    const { userId, name, category, level, target, resources } = req.body;
+    
+    if (!userId || !name) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    const newSkill = new Skill({
+      userId,
+      name,
+      category: category || 'Tools',
+      level: level || 0,
+      target: target || 'Intermediate',
+      resources: resources || []
+    });
+
+    const savedSkill = await newSkill.save();
+    res.json(savedSkill);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error("Save Error:", err);
+    res.status(400).json({ error: err.message });
   }
 });
 
-// Update Skill Progress
-app.put('/api/skills/:id/progress', async (req, res) => {
-  const { userId, level } = req.body;
+// 3. UPDATE Skill
+app.put('/api/skills/:id', async (req, res) => {
   try {
-    const skill = await Skill.findByIdAndUpdate(req.params.id, { level }, { new: true });
-    const progress = await UserProgress.findOneAndUpdate({ userId }, { $inc: { xp: 10 } }, { new: true });
-    res.json({ skill, xp: progress.xp });
+    const updatedSkill = await Skill.findByIdAndUpdate(
+      req.params.id,
+      { $set: req.body },
+      { new: true } 
+    );
+    res.json(updatedSkill);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(400).json({ error: err.message });
   }
 });
 
-// Delete Skill
+// 4. DELETE Skill
 app.delete('/api/skills/:id', async (req, res) => {
   try {
     await Skill.findByIdAndDelete(req.params.id);
@@ -302,19 +312,16 @@ app.delete('/api/skills/:id', async (req, res) => {
   }
 });
 
+/* ==========================================================================
+   FEATURE 4: AI CHALLENGES & RESOURCES (FIXED MODELS)
+   ========================================================================== */
+
 // AI Skill Gap Analysis
 app.post('/api/ai/skill-gap', async (req, res) => {
   const { currentSkills, targetRole } = req.body;
-  
   try {
-    const prompt = `
-      I am a ${targetRole}. 
-      My current skills are: ${currentSkills.join(', ')}.
-      
-      Identify 3-5 critical skills I am missing or need to improve for this role in 2026.
-      Return ONLY a raw JSON array of objects with this format:
-      [{"name": "Skill Name", "category": "Frontend/Backend/Tools", "reason": "Why it matters"}]
-    `;
+    const prompt = `I am a ${targetRole}. My current skills: ${currentSkills.join(', ')}.
+    Identify 3-5 critical missing skills. Return JSON array: [{"name": "Skill", "category": "Tools"}]`;
 
     const completion = await groq.chat.completions.create({
       messages: [{ role: "user", content: prompt }],
@@ -323,90 +330,155 @@ app.post('/api/ai/skill-gap', async (req, res) => {
 
     const content = completion.choices[0]?.message?.content || "[]";
     const jsonStr = content.replace(/```json|```/g, '').trim();
-    const suggestions = JSON.parse(jsonStr);
-
-    res.json({ suggestions });
+    res.json({ suggestions: JSON.parse(jsonStr) });
   } catch (error) {
     console.error("AI Skill Gap Error:", error);
     res.status(500).json({ error: "Failed to analyze skill gap" });
   }
 });
 
-// --- NEW: Generate Skill Challenge (LeetCode Style) ---
+// ... existing imports and setup
+
+// ... (Previous imports and setup remain the same)
+
+// --- AI ROUTES (UPDATED FOR 20 LEVELS) ---
+
+// 1. GENERATE CHALLENGE
 app.post('/api/ai/generate-challenge', async (req, res) => {
   const { skill, level } = req.body;
   
-  try {
-    const prompt = `
-      Create a technical interview question or coding challenge to test a user's knowledge of "${skill}" at a "${level}% proficiency" level.
-      
-      Return JSON format:
-      {
-        "title": "Short Title",
-        "description": "The problem statement.",
-        "type": "code", 
-        "starterCode": "function solve() { // your code }"
-      }
-    `;
+  // Expanded Difficulty Map for 20 Levels
+  const difficulties = [
+    "Novice", "Novice", "Beginner", "Beginner", "BOSS: Basic Competency", // 1-5
+    "Intermediate", "Intermediate", "Adept", "Adept", "BOSS: Problem Solving", // 6-10
+    "Advanced", "Advanced", "Expert", "Expert", "BOSS: System Design", // 11-15
+    "Master", "Master", "Grandmaster", "Grandmaster", "FINAL BOSS: Legend" // 16-20
+  ];
+  
+  const difficulty = difficulties[Math.min(level - 1, 19)];
+  const isBoss = level % 5 === 0;
 
+  try {
     const completion = await groq.chat.completions.create({
-      messages: [{ role: "user", content: prompt }],
+      messages: [
+        {
+          role: "system",
+          content: `You are a Game Master for a coding RPG. 
+          Generate a ${isBoss ? "HIGH STAKES BOSS BATTLE" : "standard"} coding challenge for ${skill}.
+          Difficulty: Level ${level} (${difficulty}).
+          
+          ${isBoss ? "For this BOSS LEVEL, make the scenario epic, the problem complex, and edge cases tricky." : "Keep it educational but fun."}
+
+          Return ONLY a raw JSON object (no markdown) with this format:
+          {
+            "title": "RPG Style Title",
+            "description": "Story-driven problem statement.",
+            "starterCode": "// Starter code here"
+          }`
+        },
+        { role: "user", content: `Generate level ${level} challenge for ${skill}.` }
+      ],
       model: "llama-3.3-70b-versatile",
-      response_format: { type: "json_object" }
+      temperature: 0.6, // Slightly higher for creativity in boss titles
     });
 
-    const challenge = JSON.parse(completion.choices[0]?.message?.content);
-    res.json(challenge);
-  } catch (error) {
-    console.error("Challenge Gen Error:", error);
+    const content = completion.choices[0]?.message?.content || "{}";
+    const cleanJson = content.replace(/```json/g, "").replace(/```/g, "").trim();
+    res.json(JSON.parse(cleanJson));
+
+  } catch (err) {
+    console.error("AI Challenge Error:", err.message);
     res.status(500).json({ error: "Failed to generate challenge" });
   }
 });
 
-// --- NEW: Validate Skill Challenge (The Judge) ---
+// --- 2. VALIDATE CHALLENGE (Updated for Star Rating) ---
 app.post('/api/ai/validate-challenge', async (req, res) => {
-  const { userId, skillId, question, userAnswer } = req.body;
+  const { question, userAnswer } = req.body;
 
   try {
-    const prompt = `
-      You are a strict code reviewer. 
-      Question: ${question}
-      User Answer: ${userAnswer}
-
-      Did they solve it correctly?
-      Return JSON:
-      {
-        "passed": boolean,
-        "feedback": "Concise feedback explaining why it passed or failed.",
-        "xpAward": number (between 10-50 based on quality)
-      }
-    `;
-
     const completion = await groq.chat.completions.create({
-      messages: [{ role: "user", content: prompt }],
+      messages: [
+        {
+          role: "system",
+          content: `Evaluate the code. Return ONLY raw JSON:
+          {
+            "passed": boolean,
+            "stars": number (1 = barely passed, 2 = good, 3 = optimal/clean code, 0 if failed),
+            "feedback": "Encouraging game-style feedback.",
+            "newXP": number (base 100 * stars)
+          }`
+        },
+        {
+          role: "user",
+          content: `Question: ${question}\nUser Code: ${userAnswer}`
+        }
+      ],
       model: "llama-3.3-70b-versatile",
-      response_format: { type: "json_object" }
+      temperature: 0.1,
     });
 
-    const result = JSON.parse(completion.choices[0]?.message?.content);
-
-    if (result.passed) {
-      // 1. Increase Skill Level (+5%)
-      await Skill.findByIdAndUpdate(skillId, { $inc: { level: 5 } });
-      
-      // 2. Update User Streak & XP using our utility function
-      const progress = await updateStreak(userId);
-      progress.xp += result.xpAward || 20; // Default 20 XP if not provided
-      await progress.save();
-      
-      result.newStreak = progress.streak;
-      result.newXP = progress.xp;
-    }
+    const content = completion.choices[0]?.message?.content || "{}";
+    const cleanJson = content.replace(/```json/g, "").replace(/```/g, "").trim();
+    const result = JSON.parse(cleanJson);
 
     res.json(result);
-  } catch (error) {
-    console.error("Validation Error:", error);
-    res.status(500).json({ error: "Grading failed" });
+
+  } catch (err) {
+    console.error("AI Validate Error:", err.message);
+    res.status(500).json({ error: "Validation failed" });
+  }
+});
+
+// Recommend Resources (Fixing "Invalid Link" & Crash issue)
+app.post('/api/ai/recommend-resources', async (req, res) => {
+  const { skill } = req.body;
+  if (!skill) return res.status(400).json({ error: 'Skill name required' });
+
+  try {
+    const completion = await groq.chat.completions.create({
+      messages: [
+        {
+          role: "system",
+          content: `You are a helpful education assistant.
+          Generate 3 high-quality learning resources for: ${skill}.
+          
+          Instead of guessing specific video IDs (which fail), construct SMART SEARCH URLs.
+          
+          Return ONLY a raw JSON array. Format:
+          [
+            { "title": "Official Docs", "url": "https://www.google.com/search?q=${skill}+official+documentation" },
+            { "title": "YouTube Crash Course", "url": "https://www.youtube.com/results?search_query=${skill}+crash+course" },
+            { "title": "Interactive Tutorial", "url": "https://www.google.com/search?q=${skill}+interactive+tutorial" }
+          ]`
+        },
+        { role: "user", content: `Resources for ${skill}` }
+      ],
+      model: "llama-3.3-70b-versatile", // UPDATED
+      temperature: 0.1,
+    });
+
+    const content = completion.choices[0]?.message?.content || "[]";
+    const cleanJson = content.replace(/```json/g, "").replace(/```/g, "").trim();
+    
+    let suggestions = [];
+    try {
+      suggestions = JSON.parse(cleanJson);
+    } catch (e) {
+      console.error("JSON Parse Error", e);
+      suggestions = [];
+    }
+
+    // Safety: Filter out bad objects
+    const validSuggestions = Array.isArray(suggestions) 
+      ? suggestions.filter(s => s && s.title && s.url) 
+      : [];
+
+    res.json({ resources: validSuggestions });
+
+  } catch (err) {
+    console.error("AI Resource Error:", err.message);
+    res.json({ resources: [] }); // Safe empty array on error
   }
 });
 
